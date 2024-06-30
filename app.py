@@ -1,50 +1,92 @@
 # Import packages
-from dash import Dash, html, dash_table, dcc, callback, Output, Input
+from dash import Dash, html, dcc, callback, Output, Input, State, callback_context
+from dash.exceptions import PreventUpdate
+
 import pandas as pd
-import plotly.express as px
-import dash_bootstrap_components as dbc
+import plotly.graph_objects as go
 
-# Incorporate data
-df = pd.read_csv('https://raw.githubusercontent.com/plotly/datasets/master/gapminder2007.csv')
+# Incorporate data from local CSV file
+df = pd.read_csv('data.csv')
 
-# Initialize the app - incorporate a Dash Bootstrap theme
-external_stylesheets = [dbc.themes.CERULEAN]
-app = Dash(__name__, external_stylesheets=external_stylesheets)
+# Convert timestamp to datetime
+df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+# Initialize the app
+app = Dash(__name__)
+
+# Global dictionary to store labels
+labels_list = []
 
 # App layout
-app.layout = dbc.Container([
-    dbc.Row([
-        html.Div('My First App with Data, Graph, and Controls', className="text-primary text-center fs-3")
-    ]),
-
-    dbc.Row([
-        dbc.RadioItems(options=[{"label": x, "value": x} for x in ['pop', 'lifeExp', 'gdpPercap']],
-                       value='lifeExp',
-                       inline=True,
-                       id='radio-buttons-final')
-    ]),
-
-    dbc.Row([
-        dbc.Col([
-            dash_table.DataTable(data=df.to_dict('records'), page_size=12, style_table={'overflowX': 'auto'})
-        ], width=6),
-
-        dbc.Col([
-            dcc.Graph(figure={}, id='my-first-graph-final')
-        ], width=6),
-    ]),
-
-], fluid=True)
+app.layout = html.Div([
+    html.H1('My App with Humidity and Temperature Plots'),
+    dcc.Graph(id='humidity-temperature-graph'),
+    dcc.Input(id='label_start', type='text', placeholder='Start Label'),
+    dcc.Input(id='label_end', type='text', placeholder='End Label'),
+    html.Button('Confirm', id='confirm-button', n_clicks=0),  # Confirm button
+    # In app.layout within app.py
+    html.Button('Download Labels', id='download-labels-button', n_clicks=0),
+    dcc.Download(id='download-labels')
+])
 
 # Add controls to build the interaction
 @callback(
-    Output(component_id='my-first-graph-final', component_property='figure'),
-    Input(component_id='radio-buttons-final', component_property='value')
+    Output('humidity-temperature-graph', 'figure'),
+    [Input('confirm-button', 'n_clicks'), Input('humidity-temperature-graph', 'relayoutData')],
+    [State('label_start', 'value'), State('label_end', 'value')]
 )
-def update_graph(col_chosen):
-    fig = px.histogram(df, x='continent', y=col_chosen, histfunc='avg')
+def update_graph(n_clicks, relayoutData, label_start, label_end):
+
+    ctx = callback_context
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    # only update the labels list if the button is clicked
+    if trigger_id == 'confirm-button' and n_clicks > 0:
+        labels_list.append((label_start, label_end))
+        print(f"Labels dictionary updated: {labels_list}")
+
+    # Create figure with secondary y-axis
+    fig = go.Figure()
+
+    # Add traces
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['humidity'], name="Humidity", mode='lines+markers'))
+    fig.add_trace(go.Scatter(x=df['timestamp'], y=df['temperature'], name="Temperature", mode='lines+markers', yaxis="y2"))
+
+    # Add titles and labels
+    fig.update_layout(
+        title="Humidity and Temperature Over Time",
+        xaxis_title="Timestamp",
+        yaxis_title="Humidity",
+        legend_title="Variable",
+        yaxis=dict(title='Humidity', titlefont=dict(color='blue'), tickfont=dict(color='blue')),
+        yaxis2=dict(title='Temperature', titlefont=dict(color='red'), tickfont=dict(color='red'), overlaying='y', side='right'),
+        template='plotly_dark',
+        autosize=True,
+    )
+
+    # Apply zoom levels from relayoutData if available
+    if relayoutData:
+        fig.update_layout(xaxis_range=[relayoutData['xaxis.range[0]'], relayoutData['xaxis.range[1]']])
+        fig.update_layout(yaxis_range=[relayoutData['yaxis.range[0]'], relayoutData['yaxis.range[1]']])
+        fig.update_layout(yaxis2_range=[relayoutData['yaxis2.range[0]'], relayoutData['yaxis2.range[1]']])
+
     return fig
+
+
+# Add download button to download labels
+@callback(
+    Output('download-labels', 'data'),
+    [Input('download-labels-button', 'n_clicks')],
+    prevent_initial_call=True
+)
+def download_labels(n_clicks):
+    if n_clicks is None or n_clicks <= 0:
+        raise PreventUpdate
+    # Convert labels_list to a DataFrame for easy download
+    labels_df = pd.DataFrame(labels_list, columns=['Start Label', 'End Label'])
+    # Use dcc.send_data_frame to download the DataFrame as a text file
+    return dcc.send_data_frame(labels_df.to_csv, 'labels_list.csv', index=False)
 
 # Run the app
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run_server(debug=True)
